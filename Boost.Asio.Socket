@@ -1,0 +1,102 @@
+//本文出自 “寻一丝烦恼” 博客，请务必保留此出处http://mayacong.blog.51cto.com/3724695/1156839
+
+#include <boost/bind.hpp> 
+#include <boost/asio.hpp> 
+#include <boost/thread.hpp> 
+using boost::asio::io_service; 
+using boost::asio::ip::tcp; 
+using boost::system::error_code; 
+using boost::asio::deadline_timer; 
+using boost::asio::buffer; 
+ 
+class MyNet 
+{ 
+public: 
+    void Accept(unsigned short port, boost::function<void ()> fun) 
+    { 
+        _pAcceptor = new tcp::acceptor(_ios, tcp::endpoint(tcp::v4(), port)); 
+        _pTimer = new deadline_timer(_ios); 
+        _pClentSkt = new tcp::socket(_ios); 
+        _pAcceptor->async_accept(*_pClentSkt, 
+             boost::bind(&MyNet::AcceptHandle, this,  
+             boost::asio::placeholders::error, //传递错误码
+             fun//传递一个函数指针
+        )); 
+        _ios.reset(); //充值事件循环状态
+        if (_ios.run() == 0) //启动事件循环
+        { 
+            throw std::runtime_error("io_service run return 0."); 
+        } 
+    } 
+    void Send(const string& data) 
+    { 
+        _pClentSkt->write_some(buffer(data, data.size())); 
+    } 
+    string Recv() 
+    {
+        _ret = _pClentSkt->read_some(buffer(_buf, 1024)); 
+        return string(_buf, _ret); 
+    } 
+    void Close() 
+    { 
+        _mutex.lock(); 
+        _pAcceptor->close(); 
+        _pClentSkt->shutdown(tcp::socket::shutdown_both); 
+        _pClentSkt->close(); 
+        _ios.stop(); 
+        _mutex.unlock(); 
+    } 
+    string GetClientIp() 
+    {//获得客户端的ip 
+        boost::asio::ip::tcp::endpoint ep = _pClentSkt->remote_endpoint(); 
+        return ep.address().to_string(); 
+    } 
+    unsigned short GetPort() 
+    {//获得监控的端口
+        return _pAcceptor->local_endpoint().port(); 
+    } 
+    static unsigned short GetLocalValidPort() 
+    {//随机过去一个本机的可用端口
+        io_service ios; 
+        tcp::acceptor acceptor(ios, tcp::endpoint(tcp::v4(), 0)); 
+        tcp::acceptor::endpoint_type et = acceptor.local_endpoint(); 
+        return et.port(); 
+    } 
+    static string GetLocalIp() 
+    {//获取本机ip
+        boost::asio::io_service io_service; 
+        tcp::resolver resolver(io_service); 
+        tcp::resolver::query query(boost::asio::ip::host_name(), ""); 
+        tcp::resolver::iterator iter = resolver.resolve(query); 
+        tcp::resolver::iterator end; // End marker. 
+        if (iter != end) 
+        { 
+            tcp::endpoint ep = *iter; 
+            return ep.address().to_string(); 
+        } 
+    } 
+    ~MyNet(void) 
+    { 
+        delete _pTimer; 
+        delete _pAcceptor; 
+        delete _pClentSkt; 
+    } 
+protected: 
+    void AcceptHandle(const error_code& error, boost::function<void ()> fun) 
+    {//异步接收连接的回调函数
+        if (error) 
+            return; 
+        //传递进来的函数指针fun未用到，本来是为了启动此函数的线程，boost::thread trd(fun); 
+    } 
+ 
+private: 
+    io_service _ios; 
+    tcp::acceptor* _pAcceptor; 
+    tcp::socket* _pClentSkt; 
+    tcp::socket* _pClentTmp; 
+    deadline_timer* _pTimer; 
+    char _buf[1024]; 
+    size_t _ret; 
+    static string _ip; 
+    boost::mutex _mutex; 
+}; 
