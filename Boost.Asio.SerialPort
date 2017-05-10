@@ -1,0 +1,85 @@
+#include <boost/bind.hpp> 
+#include <boost/asio.hpp> 
+#include <boost/thread.hpp> 
+using boost::asio::io_service; 
+using boost::system::error_code; 
+using boost::asio::serial_port; 
+using boost::asio::deadline_timer; 
+using boost::asio::buffer; 
+ 
+class MyCom 
+{ 
+public: 
+    MyCom(void) 
+    { 
+        _pSerialPort= new serial_port(_ios); 
+        _pTimer = new deadline_timer(_ios); 
+    } 
+    ~MyCom(void) 
+    { 
+        if (_pTimer != NULL) 
+        { 
+            delete _pTimer; 
+            _pTimer = NULL; 
+        } 
+        if (_pSerialPort != NULL) 
+        { 
+            delete _pSerialPort; 
+            _pSerialPort = NULL; 
+        } 
+    } 
+    void Open(const string& comName); 
+    { 
+        _pSerialPort->open(comName); 
+        _pSerialPort->set_option(serial_port::flow_control(serial_port::flow_control::none));   //流量控制为none 
+        _pSerialPort->set_option(serial_port::parity(serial_port::parity::none));   //奇偶检验为none 
+        _pSerialPort->set_option(serial_port::stop_bits(serial_port::stop_bits::one));  //停止位为1 
+        _pSerialPort->set_option(serial_port::character_size(8));   //字符大小（数据位）为8 
+        _pSerialPort->set_option(serial_port::baud_rate(115200));//波特率 
+    } 
+    void Send(const string& data) 
+    {//同步发数据 
+        _mutex.lock(); 
+        _pSerialPort->write_some(buffer(data, data.size())); 
+        _mutex.unlock(); 
+    } 
+    string Recv() 
+    {//异步收数据 
+        _mutex.lock(); 
+        memset(_buf, 0, sizeof(_buf)); 
+        _pSerialPort->async_read_some(buffer(_buf, 256),  
+            boost::bind(&MyCom::RecvHandle, this,  
+            boost::asio::placeholders::error,//传送错误码 
+            boost::asio::placeholders::bytes_transferred//传送字节数 
+            )); 
+        _mutex.unlock(); 
+        _pTimer->expires_from_now(boost::posix_time::millisec(SLEEP_TIME)); 
+        _pTimer->async_wait(boost::bind(&serial_port::cancel, _pSerialPort)); 
+        _ios.run();//异步情况下使用词句才开始执行 
+        _ios.reset();//还原状态 
+        return string(_buf, _ret); 
+    } 
+    void Close() 
+    { 
+        _mutex.lock(); 
+        if (_pSerialPort->is_open()) 
+            _pSerialPort->close(); 
+        _mutex.unlock(); 
+    } 
+ 
+protected: 
+    void RecvHandle(const error_code& error, size_t bytes_transferred) 
+    { 
+        if (!error) 
+            _pTimer->cancel();//没有错误就结束定时器 
+        _ret = bytes_transferred; 
+    } 
+ 
+private: 
+    boost::asio::io_service _ios; 
+    serial_port* _pSerialPort; 
+    deadline_timer* _pTimer; 
+    char _buf[256]; 
+    size_t _ret; 
+    boost::mutex _mutex; 
+}; 
