@@ -1,0 +1,181 @@
+// ServerDemo2.cpp : 定义控制台应用程序的入口点。
+//
+
+#include "stdafx.h"
+
+#include <iostream>
+#include <stdio.h>
+#include <stdlib.h>
+
+#include <event2/event.h>
+#include <event2/bufferevent.h>
+#include <event2/buffer.h>
+#include <event2/listener.h>
+#include <event2/util.h>
+
+#ifdef _WIN32
+#pragma comment(lib,"ws2_32.lib")
+#endif
+
+#pragma comment(lib,"libevent_core.lib")
+#pragma comment(lib,"libevent.lib")
+#pragma comment(lib,"libevent_extras.lib")
+
+#define SERVER_PORT (9997)
+#define BACKLOG		(32)
+
+#ifdef _WIN32
+#ifdef FD_SETSIZE
+#undef FD_SETSIZE
+#endif
+#define FD_SETSIZE (2048)
+#endif
+
+void do_accept(evutil_socket_t listener, short evt, void* arg);
+void read_cb(struct bufferevent* bev, void* arg);
+void write_cb(struct bufferevent* bev, void* arg);
+void error_cb(struct bufferevent* bev, short evt, void* arg);
+
+int main()
+{
+#ifdef _WIN32
+	WSADATA wsa_data;
+	WSAStartup(MAKEWORD(2,2), &wsa_data);
+
+#endif
+    //create socket
+
+	evutil_socket_t listener;
+	listener = socket(AF_INET, SOCK_STREAM, 0);
+
+	//设置socket复用
+	evutil_make_listen_socket_reuseable(listener);
+
+	//绑定
+	SOCKADDR_IN sin;
+	sin.sin_addr.s_addr = ADDR_ANY;
+	sin.sin_family = AF_INET;
+	sin.sin_port = htons(SERVER_PORT);
+
+	if (bind(listener, (SOCKADDR*)&sin, sizeof(sin)) < 0)
+	{
+		printf("bind socket error!\n");
+		return -1;
+	}
+	if (listen(listener, BACKLOG) < 0)
+	{
+		printf("listen error\n");
+		return -1;
+	}
+	
+	std::cout << "Server listening..." << std::endl;
+
+	//设置socket无阻塞模式
+	evutil_make_socket_nonblocking(listener);
+
+	//创建事件管理器
+	struct event_base* base = event_base_new();
+	if (base == NULL)
+	{
+		printf("event_base_new() error.\n");
+		return -1;
+	}
+
+	//创建事件
+	struct event* listen_event = event_new(base, listener, EV_READ | EV_PERSIST, do_accept, (void*)base);
+	
+	//添加事件
+	event_add(listen_event, NULL);
+
+	//启动事件循环
+	event_base_dispatch(base);
+
+	//结束
+	std::cout << "server done!" << std::endl;
+
+	return 0;
+}
+
+void do_accept(evutil_socket_t listener, short evt, void* arg)
+{
+	using namespace std;
+	
+	struct event_base* base = (struct event_base*)arg;
+	SOCKADDR_IN sin;
+	int slen = sizeof(sin);
+	evutil_socket_t fd = accept(listener, (SOCKADDR*)&sin, &slen);
+	if (fd < 0)
+	{
+		std::cout << "accept() error" << std::endl;
+		return;
+	}
+
+	if (fd > FD_SETSIZE)
+	{
+		std::cout << "fd " << fd << " error!" << std::endl;
+		return;
+	}
+
+	cout << "accept:fd=" << fd << endl;
+
+	//创建事件管理器
+	struct bufferevent* bev = bufferevent_socket_new(base, fd, BEV_OPT_CLOSE_ON_FREE);
+
+	//设置回调
+	bufferevent_setcb(bev, read_cb, write_cb, error_cb, arg);
+
+	//启动读写管理器
+	bufferevent_enable(bev, EV_PERSIST | EV_READ | EV_WRITE);
+
+}
+
+void read_cb(struct bufferevent* bev, void* arg)
+{
+	using namespace std;
+
+#define MAX_LINE    256
+	char szLine[MAX_LINE + 1] = { 0 };
+	evutil_socket_t fd = bufferevent_getfd(bev);
+	int n = 0;
+
+	char szMsg[MAX_LINE] = "I got messgae";
+
+	while (n = bufferevent_read(bev, szLine, MAX_LINE),n > 0)
+	{
+		szLine[n] = '\0';
+		cout << "Read Line:" << szLine << endl;
+    
+		//这里把读到的数据echo给client，实际代码中可以不要
+     bufferevent_write(bev, szMsg, n);
+     
+    //bufferevent_write(bev, szMsg, n);
+	}
+}
+
+void write_cb(struct bufferevent* bev, void* arg)
+{
+// 	char szMsg[MAX_LINE] = "I got message\n";
+// 	int  n = strlen(szMsg);
+// 	bufferevent_write(bev, szMsg, n);
+}
+
+void error_cb(struct bufferevent* bev,short evt,void* arg) 
+{
+	using namespace std;
+	evutil_socket_t fd = bufferevent_getfd(bev);
+	cout << "error: fd=" << fd << endl;
+
+	if (evt & BEV_EVENT_TIMEOUT)
+	{
+		printf("timeout\n");
+	}
+	else if (evt & BEV_EVENT_EOF)
+	{ 
+		printf("connection closed\n");
+	}
+	else if (evt & BEV_EVENT_ERROR)
+	{
+		printf("some error\n");
+	}
+	bufferevent_free(bev);
+}
